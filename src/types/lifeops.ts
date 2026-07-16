@@ -98,6 +98,53 @@ export type PlanIntentContract = {
 
 export type ExecutionPlanStep = { id?: string; tool?: string; purpose?: string };
 
+export type AppRole = "user" | "operator_admin";
+
+export type AppMeResponse = {
+  user_id: string;
+  role: AppRole;
+  user_name: string;
+};
+
+export type AppAuditItem = {
+  audit_id: string;
+  actor_user_id: string;
+  actor_role: AppRole | string;
+  action: string;
+  resource_type: string;
+  resource_id?: string | null;
+  details?: string | null;
+  created_at?: string | null;
+};
+
+export type ConfirmationAction = {
+  action: string;
+  description: string;
+  required: boolean;
+};
+
+export type StandardPlanItem = {
+  time: string;
+  action: string;
+  location: string;
+  cost_estimate: number | null;
+  evidence: string[];
+};
+
+export type ToolSource = {
+  tool_name: string;
+  source_id: string;
+  title: string;
+  url?: string | null;
+  snippet: string;
+};
+
+export type RiskItem = {
+  level: "low" | "medium" | "high" | string;
+  description: string;
+  mitigation: string;
+};
+
 export type QualityScore = {
   overall: number;
   dimensions: Array<{
@@ -118,15 +165,21 @@ export type PlanResponse = {
   status?: string;
   task_id?: string;
   trace_id?: string;
+  task_summary?: string;
   constraints?: Record<string, unknown>;
   intent_contract?: PlanIntentContract;
   execution_plan?: ExecutionPlanStep[];
+  plan?: StandardPlanItem[];
+  budget_summary?: string;
+  tool_sources?: ToolSource[];
+  risks?: RiskItem[];
   final_plan?: FinalPlan;
   assistant_message?: string;
   quality_warnings?: string[];
   quality_score?: QualityScore;
   execution_log?: ExecutionLogItem[];
   tool_results?: unknown[];
+  confirmations?: ConfirmationAction[];
   question?: string;
 };
 

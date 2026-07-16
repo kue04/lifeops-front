@@ -43,6 +43,9 @@ import {
   cachePlan,
   cacheRunEvents,
   confirmPlanAction,
+  exportCalendarIcs,
+  getAppAudit,
+  getAppMe,
   getHistory,
   getHistoryItem,
   getProfile,
@@ -55,7 +58,7 @@ import {
   submitFeedback,
   type PlanRequestContext,
 } from "./api/lifeops";
-import type { ExecutionLogItem, FinalPlan, HistoryItem, ItineraryItem, PlanFeedbackPayload, PlanResponse, ProfileResponse, ProviderHealthResponse, QualityScore, RunEvent } from "./types/lifeops";
+import type { AppAuditItem, AppMeResponse, ExecutionLogItem, FinalPlan, HistoryItem, ItineraryItem, PlanFeedbackPayload, PlanResponse, ProfileResponse, ProviderHealthResponse, QualityScore, RunEvent } from "./types/lifeops";
 
 type AppSettings = {
   defaultCity: string;
@@ -75,7 +78,7 @@ type MemoryResolution = {
 };
 type RunStepState = RunEvent & { stepKey: string; startedAt?: string; finishedAt?: string };
 type ToolStepState = RunEvent & { output_summary?: unknown; preview_items?: unknown[] };
-type ConfirmedActionState = { type: string; label: string; execution: string };
+type ConfirmedActionState = { type: string; label: string; execution: string; confirmationId: string };
 
 const SETTINGS_KEY = "lifeops:settings";
 const HISTORY_PAGE_SIZE = 10;
@@ -114,6 +117,7 @@ const homeRevealPhrases = ["目标", "时间", "预算", "位置", "偏好", "�
 function App() {
   const [settings, setSettings] = useState<AppSettings>(() => readSettings());
   const [settingsOpen, setSettingsOpen] = useState(false);
+  const [appMe, setAppMe] = useState<AppMeResponse | null>(null);
 
   useEffect(() => {
     localStorage.setItem(SETTINGS_KEY, JSON.stringify(settings));
@@ -123,6 +127,10 @@ function App() {
       document.documentElement.dataset.theme = settings.theme;
     }
   }, [settings]);
+
+  useEffect(() => {
+    getAppMe().then(setAppMe).catch(() => undefined);
+  }, []);
 
   return (
     <div className="app">
@@ -136,8 +144,13 @@ function App() {
             <NavLink to="/">规划</NavLink>
             <NavLink to="/profile">画像</NavLink>
             <NavLink to="/history">历史</NavLink>
+            <NavLink to="/audit">审计</NavLink>
             <NavLink to="/showcase">展示</NavLink>
           </nav>
+          <div className="identityPill" title={appMe ? `当前用户：${appMe.user_id}` : "正在读取当前用户"}>
+            <UserRound size={15} />
+            <span>{appMe?.role === "operator_admin" ? "运营管理员" : "普通用户"}</span>
+          </div>
           <button className="iconButton" onClick={() => setSettingsOpen(true)} aria-label="打开设置">
             <Settings size={18} />
           </button>
@@ -149,6 +162,7 @@ function App() {
         <Route path="/plans/:traceId" element={<PlanDetail />} />
         <Route path="/profile" element={<ProfilePage />} />
         <Route path="/history" element={<HistoryPage />} />
+        <Route path="/audit" element={<AuditPage />} />
         <Route path="/showcase" element={<ShowcasePage />} />
       </Routes>
       {settingsOpen && (
@@ -787,6 +801,29 @@ function PlanDetail() {
     }
   }
 
+  async function downloadCalendarFile() {
+    if (!plan || !confirmedAction?.confirmationId) {
+      setActionMessage("请先确认导出日历动作。");
+      return;
+    }
+    setActionMessage("");
+    setShareFallbackText("");
+    try {
+      const blob = await exportCalendarIcs(plan, confirmedAction.confirmationId);
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `${plan.date ? `lifeops_plan_${String(plan.date).slice(0, 10).replace(/-/g, "")}` : "lifeops_plan"}.ics`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+      setActionMessage("已导出 ICS 日历文件。");
+    } catch (err) {
+      setActionMessage(err instanceof Error ? err.message : "日历导出失败");
+    }
+  }
+
   async function sharePlan() {
     if (!plan || !planResult) return;
     const text = buildShareText(plan, planResult);
@@ -841,22 +878,26 @@ function PlanDetail() {
 
   async function confirmFirstAction() {
     if (!plan || !planResult) return;
-    const action = firstConfirmAction(plan);
+    const action = firstConfirmAction(plan, planResult);
     if (!action) return;
+    const actionRecord = asRecord(action) || {};
+    const actionType = String(actionRecord.action || actionRecord.type || "export_calendar");
+    const actionLabel = String(actionRecord.description || actionRecord.label || "确认动作");
     setActionMessage("");
     setShareFallbackText("");
     try {
       const result = await confirmPlanAction({
         plan_id: planResult.task_id,
         trace_id: planResult.trace_id || runTraceId,
-        action_type: String(action.type || "external_side_effect"),
-        label: String(action.label || "确认动作"),
-        items: Array.isArray(action.items) ? action.items : [],
+        action_type: actionType,
+        label: actionLabel,
+        items: Array.isArray(actionRecord.items) ? actionRecord.items : [],
       });
       setConfirmedAction({
-        type: String(action.type || "external_side_effect"),
-        label: String(action.label || "确认动作"),
+        type: actionType,
+        label: actionLabel,
         execution: result.execution,
+        confirmationId: result.confirmation_id,
       });
       setActionMessage(result.message || "已记录确认。");
     } catch (err) {
@@ -900,10 +941,16 @@ function PlanDetail() {
           <Share2 size={18} />
           分享计划
         </button>
-        {firstConfirmAction(plan) && (
+        {firstConfirmAction(plan, activeResult) && (
           <button type="button" onClick={confirmFirstAction} disabled={Boolean(confirmedAction)}>
             <BadgeCheck size={18} />
             {confirmedAction ? "已确认边界" : "确认动作"}
+          </button>
+        )}
+        {confirmedAction?.type === "export_calendar" && (
+          <button type="button" onClick={downloadCalendarFile}>
+            <CalendarDays size={18} />
+            导出日历
           </button>
         )}
         {actionMessage && <span>{actionMessage}</span>}
@@ -939,7 +986,7 @@ function PlanDetail() {
       <IntentExecutionBrief result={activeResult} />
       <MemoryParticipation result={activeResult} events={runEvents} />
       <QualityScoreCard score={activeResult.quality_score || estimateQualityScore(plan, activeResult)} />
-      <PlanStructureGrid plan={plan} />
+      <PlanStructureGrid plan={plan} result={activeResult} />
       <section id="路线" className="panel">
         <SectionTitle icon={<RouteIcon size={20} />} title={timelineTitle(taskType)} />
         <div className="routeSummary">
@@ -1182,11 +1229,11 @@ type DisplayItem = {
   chips?: string[];
 };
 
-function PlanStructureGrid({ plan }: { plan: FinalPlan }) {
+function PlanStructureGrid({ plan, result }: { plan: FinalPlan; result: PlanResponse }) {
   const cards = [
     { title: "任务清单", icon: <CheckCircle2 size={18} />, items: normalizeDisplayItems(plan.todo_items || plan.errand_items) },
     { title: "时间块", icon: <CalendarDays size={18} />, items: normalizeDisplayItems(plan.time_blocks) },
-    { title: "确认动作", icon: <BadgeCheck size={18} />, items: normalizeDisplayItems(plan.confirm_actions) },
+    { title: "确认动作", icon: <BadgeCheck size={18} />, items: normalizeDisplayItems(result.confirmations || plan.confirm_actions) },
     { title: "验收标准", icon: <Gauge size={18} />, items: normalizeTextItems(plan.acceptance_criteria) },
     { title: "风险提示", icon: <AlertCircle size={18} />, items: normalizeTextItems(plan.risks) },
     { title: "备选方案", icon: <Compass size={18} />, items: normalizeDisplayItems(plan.alternatives || plan.fallbacks) },
@@ -1538,6 +1585,59 @@ function HistoryPage() {
           <ChevronRight size={18} />
         </button>
       </div>
+    </main>
+  );
+}
+
+function AuditPage() {
+  const [items, setItems] = useState<AppAuditItem[]>([]);
+  const [error, setError] = useState("");
+  const [loading, setLoading] = useState(true);
+
+  useEffect(() => {
+    getAppAudit(80)
+      .then((result) => setItems(result.items))
+      .catch((err) => setError(err instanceof Error ? err.message : "审计日志加载失败"))
+      .finally(() => setLoading(false));
+  }, []);
+
+  return (
+    <main className="historyPage auditPage pageEnter">
+      <div className="historyHeader">
+        <div>
+          <h1>审计日志</h1>
+          <p className="muted">只读查看系统关键动作：计划开始、确认动作、导出日历和反馈提交。</p>
+        </div>
+      </div>
+
+      {loading && <section className="panel">正在读取审计日志...</section>}
+      {error && (
+        <section className="panel auditDenied">
+          <AlertCircle size={22} />
+          <div>
+            <b>当前身份没有审计权限</b>
+            <p className="muted">{error}</p>
+          </div>
+        </section>
+      )}
+      {!loading && !error && (
+        <section className="auditList">
+          {items.map((item) => (
+            <article key={item.audit_id} className="auditRow">
+              <FileSearch size={18} />
+              <div>
+                <div className="auditRowTitle">
+                  <b>{auditActionLabel(item.action)}</b>
+                  <span>{item.created_at || "时间未知"}</span>
+                </div>
+                <p>{item.actor_user_id} · {item.actor_role} · {item.resource_type}{item.resource_id ? `/${item.resource_id}` : ""}</p>
+                {auditDetails(item.details) && <small>{auditDetails(item.details)}</small>}
+              </div>
+            </article>
+          ))}
+          {!items.length && <div className="emptyHistory">暂无审计日志。</div>}
+        </section>
+      )}
     </main>
   );
 }
@@ -2715,7 +2815,7 @@ function trustFacts(
   const realPlaces = items.filter((item) => !isUnresolvedPlaceItem(item) && !isFallbackProviderItem(item)).length;
   const fallbackPlaces = items.filter(isFallbackProviderItem).length;
   const unknownCosts = plan.budget?.unknown_activity_cost_items?.length || items.filter((item) => !item.cost_known).length;
-  const hasConfirm = Boolean(plan.confirm_actions?.length);
+  const hasConfirm = Boolean(result.confirmations?.length || plan.confirm_actions?.length);
   const providerIssues = providerHealth?.providers.filter((item) => item.status !== "ok") || [];
   const warnings = qualityWarningList(result).length;
 
@@ -2788,9 +2888,34 @@ function providerLabel(name: string) {
   }[name] || name;
 }
 
+function auditActionLabel(action: string) {
+  return {
+    plan_start: "开始规划",
+    plan_generated: "生成计划",
+    plan_replanned: "重规划",
+    action_confirmed: "确认动作",
+    calendar_exported: "导出日历",
+    feedback_submitted: "提交反馈",
+  }[action] || action;
+}
+
+function auditDetails(value?: string | null) {
+  if (!value) return "";
+  try {
+    const record = JSON.parse(value) as Record<string, unknown>;
+    return Object.entries(record)
+      .filter(([, item]) => item !== null && item !== undefined && item !== "")
+      .slice(0, 4)
+      .map(([key, item]) => `${metaLabel(key)}：${formatCompactValue(item)}`)
+      .join(" · ");
+  } catch {
+    return value;
+  }
+}
+
 function estimateLifeTaskQualityScore(plan: FinalPlan, result: PlanResponse): QualityScore {
   const hasTimeline = Boolean(plan.itinerary?.length);
-  const hasConfirm = Boolean(plan.confirm_actions?.length);
+  const hasConfirm = Boolean(result.confirmations?.length || plan.confirm_actions?.length);
   const taskCount = Number(plan.todo_items?.length || plan.errand_items?.length || plan.meal_candidates?.length || 0);
   const warnings = qualityWarningList(result).length;
   const dimensions = [
@@ -2928,7 +3053,9 @@ function hasPlanContent(plan?: FinalPlan | null) {
   );
 }
 
-function firstConfirmAction(plan: FinalPlan) {
+function firstConfirmAction(plan: FinalPlan, result?: PlanResponse | null) {
+  const [standardAction] = result?.confirmations || [];
+  if (standardAction) return standardAction;
   const [action] = plan.confirm_actions || [];
   return isRecord(action) ? action : null;
 }
@@ -2981,7 +3108,7 @@ function buildPlanDocumentHtml(plan: FinalPlan, result: PlanResponse) {
     : `<p class="empty">暂无时间线。</p>`;
   const risks = [...(plan.risks || []), ...(plan.fallbacks || [])].slice(0, 8);
   const sources = (plan.travel_research?.sources || []).slice(0, 8);
-  const todos = normalizeDisplayItems(plan.todo_items || plan.errand_items || plan.confirm_actions).slice(0, 8);
+  const todos = normalizeDisplayItems(plan.todo_items || plan.errand_items || result.confirmations || plan.confirm_actions).slice(0, 8);
   const trust = trustFacts(plan, result, null, null);
 
   return `<!doctype html>
@@ -3386,7 +3513,7 @@ function agentPlanBrief(plan: FinalPlan, result: PlanResponse) {
   if (plan.task_type === "todo") {
     const tasks = normalizeDisplayItems(plan.todo_items).map((item) => item.title).slice(0, 4);
     const blocks = normalizeDisplayItems(plan.time_blocks).map((item) => item.title).slice(0, 3);
-    const confirms = normalizeDisplayItems(plan.confirm_actions).map((item) => item.title).slice(0, 2);
+    const confirms = normalizeDisplayItems(result.confirmations || plan.confirm_actions).map((item) => item.title).slice(0, 2);
     return [
       tasks.length ? `这次会先处理 ${tasks.join("、")}。` : "这次计划会把目标拆成可执行任务。",
       blocks.length ? `时间上按 ${blocks.join("、")} 推进。` : "",

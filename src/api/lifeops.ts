@@ -1,4 +1,4 @@
-import type { HistoryItem, PlanFeedbackPayload, PlanResponse, ProfileResponse, ProviderHealthResponse, RunEvent, RunStatus } from "../types/lifeops";
+import type { AppAuditItem, AppMeResponse, FinalPlan, HistoryItem, PlanFeedbackPayload, PlanResponse, ProfileResponse, ProviderHealthResponse, RunEvent, RunStatus } from "../types/lifeops";
 
 const API_BASE = (import.meta.env.VITE_LIFEOPS_API_BASE ?? "http://localhost:8000").replace(/\/$/, "");
 
@@ -27,55 +27,63 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export function createPlan(userInput: string, context: PlanRequestContext = {}) {
-  return request<PlanResponse>("/plan", {
+  return request<PlanResponse>("/app/plan", {
     method: "POST",
     body: JSON.stringify({ user_input: userInput, ...context }),
   });
 }
 
 export function startPlanRun(userInput: string, previousResult?: PlanResponse, context: PlanRequestContext = {}) {
-  return request<{ trace_id: string }>("/runs/plan", {
+  return request<{ trace_id: string }>("/app/runs/plan", {
     method: "POST",
     body: JSON.stringify({ user_input: userInput, previous_result: previousResult, ...context }),
   });
 }
 
 export function getRunStatus(traceId: string) {
-  return request<RunStatus>(`/runs/${traceId}`);
+  return request<RunStatus>(`/app/runs/${traceId}`);
 }
 
 export function runEventsUrl(traceId: string) {
-  return `${API_BASE}/runs/${traceId}/events`;
+  return `${API_BASE}/app/runs/${traceId}/events`;
 }
 
 export function replan(userInput: string, previousResult: PlanResponse, context: PlanRequestContext = {}) {
-  return request<PlanResponse>("/replan", {
+  return request<PlanResponse>("/app/replan", {
     method: "POST",
     body: JSON.stringify({ user_input: userInput, previous_result: previousResult, ...context }),
   });
 }
 
 export function getHistory(limit = 20) {
-  return request<{ items: HistoryItem[] }>(`/history?limit=${limit}`);
+  return request<{ items: HistoryItem[] }>(`/app/history?limit=${limit}`);
 }
 
 export function getProfile() {
-  return request<ProfileResponse>("/profile");
+  return request<ProfileResponse>("/app/profile");
 }
 
 export function getProviderHealth() {
   return request<ProviderHealthResponse>("/health/providers");
 }
 
+export function getAppMe() {
+  return request<AppMeResponse>("/app/me");
+}
+
+export function getAppAudit(limit = 50) {
+  return request<{ items: AppAuditItem[] }>(`/app/audit?limit=${limit}`);
+}
+
 export function submitFeedback(payload: PlanFeedbackPayload) {
-  return request<{ feedback_id: string; learned_preferences: Array<{ type: string; content: string }>; created_at: string }>("/feedback", {
+  return request<{ feedback_id: string; learned_preferences: Array<{ type: string; content: string }>; created_at: string }>("/app/feedback", {
     method: "POST",
     body: JSON.stringify(payload),
   });
 }
 
 export function getHistoryItem(taskId: string) {
-  return request<{ found: boolean; item?: HistoryItem | null; result?: PlanResponse | null }>(`/history/${taskId}`);
+  return request<{ found: boolean; item?: HistoryItem | null; result?: PlanResponse | null }>(`/app/history/${taskId}`);
 }
 
 export function confirmPlanAction(payload: {
@@ -87,12 +95,26 @@ export function confirmPlanAction(payload: {
 }) {
   return request<{
     status: string;
+    confirmation_id: string;
     execution: string;
     message: string;
-  }>("/confirm-action", {
+  }>("/app/confirm-action", {
     method: "POST",
     body: JSON.stringify(payload),
   });
+}
+
+export async function exportCalendarIcs(finalPlan: FinalPlan, confirmationId: string) {
+  const response = await fetch(`${API_BASE}/app/calendar/ics`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ final_plan: finalPlan, confirmation_id: confirmationId }),
+  });
+  if (!response.ok) {
+    const message = await response.text();
+    throw new Error(message || `导出失败：${response.status}`);
+  }
+  return response.blob();
 }
 
 export function cachePlan(result: PlanResponse) {
