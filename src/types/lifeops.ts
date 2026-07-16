@@ -84,6 +84,11 @@ export type FinalPlan = {
   confirm_actions?: unknown[];
   intent_contract?: PlanIntentContract;
   execution_plan?: ExecutionPlanStep[];
+  agent_tasks?: AgentTask[];
+  planner_meta?: PlannerMeta;
+  agent_runs?: AgentRunRecord[];
+  memory_resolution?: MemoryResolution;
+  critic?: CriticDecision;
 };
 
 export type PlanIntentContract = {
@@ -96,7 +101,68 @@ export type PlanIntentContract = {
   missing_fields?: string[];
 };
 
-export type ExecutionPlanStep = { id?: string; tool?: string; purpose?: string };
+export type AgentTask = {
+  task_id: string;
+  agent: "travel" | "meal" | "errand" | "todo" | string;
+  objective: string;
+  depends_on?: string[];
+  required_outputs?: string[];
+  context?: Record<string, unknown>;
+  revision_context?: string[];
+};
+
+export type PlannerMeta = {
+  source: "llm" | "rule_fallback" | string;
+  model?: string | null;
+  fallback_reason?: string | null;
+  validation_errors?: string[];
+  strategy?: string;
+};
+
+export type AgentRunRecord = {
+  task_id: string;
+  agent: string;
+  objective: string;
+  status: "success" | "degraded" | "blocked" | string;
+  tools_used: string[];
+  output_summary?: Record<string, unknown>;
+  warnings?: string[];
+  latency_ms?: number;
+  revision_round?: number;
+};
+
+export type CriticDecision = {
+  passed: boolean;
+  issues: Array<{
+    code: string;
+    severity: "low" | "medium" | "high" | string;
+    agent?: string | null;
+    message: string;
+    revisable?: boolean;
+  }>;
+  next_action: "final" | "revise" | "ask_user" | string;
+  revision_targets?: string[];
+  review?: string;
+};
+
+export type MemoryResolution = {
+  applied_likes?: string[];
+  applied_dislikes?: string[];
+  suppressed_likes?: Array<string | { value?: string; reason?: string }>;
+  suppressed_dislikes?: Array<string | { value?: string; reason?: string }>;
+  pace?: string | null;
+  budget_style?: string | null;
+};
+
+export type ExecutionPlanStep = {
+  id?: string;
+  task_id?: string;
+  agent?: string;
+  tool?: string;
+  purpose?: string;
+  depends_on?: string[];
+  status?: string;
+};
 
 export type AppRole = "user" | "operator_admin";
 
@@ -169,6 +235,11 @@ export type PlanResponse = {
   constraints?: Record<string, unknown>;
   intent_contract?: PlanIntentContract;
   execution_plan?: ExecutionPlanStep[];
+  agent_tasks?: AgentTask[];
+  planner_meta?: PlannerMeta;
+  agent_runs?: AgentRunRecord[];
+  memory_resolution?: MemoryResolution;
+  critic?: CriticDecision;
   plan?: StandardPlanItem[];
   budget_summary?: string;
   tool_sources?: ToolSource[];
@@ -227,6 +298,9 @@ export type RunEvent = {
   parent_node?: string;
   node: string;
   tool_name?: string;
+  agent_name?: string;
+  task_id?: string;
+  revision_round?: number;
   summary: string;
   details?: unknown;
   input?: unknown;

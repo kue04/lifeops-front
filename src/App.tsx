@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import type { CSSProperties, ReactNode } from "react";
 import { ShowcasePage } from "./ShowcasePage";
+import { MultiAgentTrace } from "./MultiAgentTrace";
 import {
   cachePlan,
   cacheRunEvents,
@@ -984,6 +985,7 @@ function PlanDetail() {
       <RecommendationBasis plan={plan} />
       <TrustBrief plan={plan} result={activeResult} providerHealth={providerHealth} confirmedAction={confirmedAction} />
       <IntentExecutionBrief result={activeResult} />
+      <MultiAgentTrace result={activeResult} />
       <MemoryParticipation result={activeResult} events={runEvents} />
       <QualityScoreCard score={activeResult.quality_score || estimateQualityScore(plan, activeResult)} />
       <PlanStructureGrid plan={plan} result={activeResult} />
@@ -2198,12 +2200,13 @@ function ToolEventGroup({ tools }: { tools: ToolStepState[] }) {
   return (
     <div className="toolGroup">
       {tools.map((tool) => (
-        <details className={`toolCard ${tool.status}`} key={`${tool.parent_node}-${tool.tool_name || tool.node}`}>
+        <details className={`toolCard ${tool.status}`} key={`${tool.parent_node}-${tool.agent_name || "shared"}-${tool.task_id || "task"}-${tool.tool_name || tool.node}`}>
           <summary>
             <span className="toolStatus">
               {tool.status === "done" ? <CheckCircle2 size={16} /> : tool.status === "error" ? <AlertCircle size={16} /> : <Loader2 className="spin" size={16} />}
             </span>
             <b>{toolLabel(tool.tool_name || tool.node)}</b>
+            {tool.agent_name && <i>{tool.agent_name} Agent</i>}
             <span>{tool.summary}</span>
           </summary>
           <ToolCardBody tool={tool} />
@@ -2355,7 +2358,7 @@ function buildToolGroups(events: RunEvent[]) {
   const byKey = new Map<string, ToolStepState>();
   for (const event of events) {
     if (event.phase !== "tool" || !event.parent_node) continue;
-    const key = `${runStepKey({ ...event, phase: "node", node: event.parent_node })}:${event.tool_name || event.node}`;
+    const key = `${runStepKey({ ...event, phase: "node", node: event.parent_node })}:${event.agent_name || "shared"}:${event.task_id || "task"}:${event.tool_name || event.node}`;
     byKey.set(key, { ...(byKey.get(key) || {}), ...event });
   }
   for (const tool of byKey.values()) {
@@ -2375,7 +2378,8 @@ function runStepKey(event: RunEvent) {
 
 function eventRound(event: RunEvent) {
   const details = asRecord(event.details);
-  return details?.round ? String(details.round) : "initial";
+  if (details?.round) return String(details.round);
+  return event.revision_round ? `revision_${event.revision_round}` : "initial";
 }
 
 function stepRank(event: RunEvent) {
@@ -2383,7 +2387,7 @@ function stepRank(event: RunEvent) {
 }
 
 function roundRank(round: string) {
-  return round === "auto_replan" ? 1 : 0;
+  return round === "auto_replan" || round.startsWith("revision_") ? 1 : 0;
 }
 
 function runEventKey(event: RunEvent) {
